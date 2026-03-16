@@ -31,12 +31,12 @@ func LoadConfig() (*Config, error) {
 	connStr := os.Getenv("DB_CONNECTION_STRING")
 	if connStr == "" {
 		// Fallback для примера, в продакшене лучше строго требовать ENV
-		connStr = "server=serkweb.serk.lan;user id=sa;password=OrchestraSQL;port=1433;database=UserModules"
+		connStr = "***"
 	}
 
 	authKey := os.Getenv("GIGACHAT_AUTH_KEY")
 	if authKey == "" {
-		authKey = "MDE5YWEyMTMtNTAwYS03Nzk3LWFlNjQtNjZiZDVhNGM2YWFhOjQ0ODc5ZjE4LTU1MzgtNGVhNS1hNmRjLTE3ZmFlMzI2Y2IxZA=="
+		authKey = "***"
 	}
 
 	return &Config{
