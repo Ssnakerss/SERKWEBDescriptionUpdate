@@ -41,10 +41,11 @@ func generateFieldDescriptionByAI(ctx context.Context, key string, request strin
 	messages := []gigago.Message{
 		{Role: gigago.RoleUser,
 			Content: `По названию базы данных, описанию назначения данных в этой базе, названиям таблицы и поля в таблице придумать описание для этого поля на английском языке. 
-			Входные данные организованы так,   разделитель -  точка с запятой:
+			Входные данные организованы так, разделитель-точка с запятой:
 			название базы данных;назначение данных;название таблицы;список полей
 			Например: Watchdog;система мониторинга работы оборудования;Machines;MachineName;MachineType;MACAddress
 			Формат ответа - список название поля:описание поля разделённыем точкой с запятой, одной строкой. Не используй сивол перевода строки.
+			не изменяй названия полей.
 			описание должно быть на английском языке.
 			Например - MachineName:The name of the machine/device;MachineType:The type of the device;MACAddress:The MAC address of the machine
 			Входные данные:` + request,
@@ -79,7 +80,6 @@ func generateFieldDescriptionsForTable(cfg *config.Config, tableName string, col
 			cDesc := strings.TrimFunc(col[1], func(r rune) bool { return !unicode.IsPrint(r) })
 			if cName != "" {
 				fieldDescriptions[cName] = cDesc
-				fmt.Printf("COLUMN:%s|DESCRIPTION:%s\n", cName, cDesc)
 			}
 		}
 	}
@@ -106,7 +106,6 @@ func updateTableColumnDescriptions(db *sql.DB, cfg *config.Config) error {
 			return fmt.Errorf("ошибка чтения строки: %w", err)
 		}
 		columnName = strings.TrimFunc(columnName, func(r rune) bool { return !unicode.IsPrint(r) })
-		fmt.Printf("TABLE:%s|COLUMN:%s\n", tableName, columnName)
 		tableColumns[tableName] = append(tableColumns[tableName], columnName)
 	}
 
@@ -116,6 +115,7 @@ func updateTableColumnDescriptions(db *sql.DB, cfg *config.Config) error {
 
 	// Для каждой таблицы генерируем описания и обновляем
 	for tableName, columns := range tableColumns {
+		fmt.Printf("Работаем с таблицей %s\n", tableName)
 		fieldDescriptions, err := generateFieldDescriptionsForTable(cfg, tableName, columns)
 		if err != nil {
 			return err
@@ -172,38 +172,34 @@ func updateDescriptionDb(db *sql.DB, cfg *config.Config, tableName string, field
 				@level1type = N'TABLE', @level1name = @p2,
 				@level2type = N'COLUMN', @level2name = @p3`
 		}
-
 		_, err = db.Exec(execQuery, description, tableName, column)
 		if err != nil {
-			log.Printf("Ошибка установки описания для %s.%s.%s: %v", cfg.Database, tableName, column, err)
-			log.Printf("Query: %s", execQuery)
+			log.Printf("Ошибка установки описания для %s.%s.%s: ", cfg.Database, tableName, column)
+			log.Printf("%v", err)
+			log.Printf("Description: %s", description)
+			log.Print("--------------------------")
 			continue // Продолжаем, даже если одна операция не удалась
 		}
-		log.Printf("Описание для %s.%s.%s успешно обновлено", cfg.Database, tableName, column)
+
+		err = updateDescriptionINDb(db, cfg.Database, tableName, column, description)
+		if err != nil {
+			log.Printf("[ALL_DB_TB_COL_LIST] Ошибка обновления описания  для %s.%s.%s: %v", cfg.Database, tableName, column, err)
+		}
+
 	}
-	err := updateDescriptionINDb(db, cfg.Database, tableName, fieldDescriptions)
-	if err != nil {
-		log.Printf("Ошибка обновления описаний для таблицы %s: %v", tableName, err)
-	}
-	// fmt.Printf("%v\n", fieldDescriptions)
 	return nil
 }
 
 // updateDescriptionDb обновляет описания указанных полей в таблице базы данных
-func updateDescriptionINDb(db *sql.DB, databaseName, tableName string, fieldDescriptions map[string]string) error {
-	updateQuery := `UPDATE usermodules.[user].ALL_DB_TB_COL_LIST SET DESCRIPTION = @p1 
-			WHERE DATABASE_NAME = @p2 AND TABLE_NAME = @p3 AND COLUMN_NAME = @p4`
-
-	for column, description := range fieldDescriptions {
-		_, err := db.Exec(updateQuery, description, databaseName, tableName, column)
-		if err != nil {
-			log.Printf("Ошибка обновления описания для %s.%s.%s: %v", databaseName, tableName, column, err)
-			continue // Не останавливаемся при ошибке одного поля
-		}
-		log.Printf("Обновлено описание для %s.%s.%s", databaseName, tableName, column)
-	}
-
-	return nil
+func updateDescriptionINDb(db *sql.DB, databaseName, tableName, columnName, description string) error {
+	updateQuery := `UPDATE usermodules.[user].ALL_DB_TB_COL_LIST SET 
+			DESCRIPTION = @p1 
+			WHERE 
+			DATABASE_NAME = @p2 AND 
+			TABLE_NAME = @p3 
+			AND COLUMN_NAME = @p4`
+	_, err := db.Exec(updateQuery, description, databaseName, tableName, columnName)
+	return err
 }
 
 func main() {
@@ -211,8 +207,6 @@ func main() {
 	if err != nil {
 		log.Fatal("Ошибка загрузки конфигурации: ", err)
 	}
-	fmt.Printf("Loaded config: %+v\n", cfg)
-
 	if cfg.Database == "" || cfg.DataDescription == "" || cfg.Schema == "" {
 		log.Fatal("необходимо указать базу-database, схему-schems и описание данных-datadesc")
 	}
