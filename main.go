@@ -17,9 +17,9 @@ import (
 const (
 	// Connection string для подключения к MS SQL
 	// Пример: "server=localhost;user id=sa;password=yourPassword;port=1433;database=master"
-	connectionString = "server=serkweb.serk.lan;user id=sa;password=OrchestraSQL;port=1433;database=UserModules"
+	connectionString = "***"
 
-	gigachatAuthKey = "MDE5YWEyMTMtNTAwYS03Nzk3LWFlNjQtNjZiZDVhNGM2YWFhOjQ0ODc5ZjE4LTU1MzgtNGVhNS1hNmRjLTE3ZmFlMzI2Y2IxZA=="
+	gigachatAuthKey = "***"
 	schema          = "rma"
 )
 
