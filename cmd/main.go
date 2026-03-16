@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"os"
+	"serkwebDescriptionUpdate/internal/config"
 	"strings"
 	"time"
 	"unicode"
@@ -14,20 +14,11 @@ import (
 	_ "github.com/denisenkom/go-mssqldb"
 )
 
-const (
-	// Connection string для подключения к MS SQL
-	// Пример: "server=localhost;user id=sa;password=yourPassword;port=1433;database=master"
-	connectionString = "server=serkweb.serk.lan;user id=sa;password=OrchestraSQL;port=1433;database=UserModules"
-
-	gigachatAuthKey = "MDE5YWEyMTMtNTAwYS03Nzk3LWFlNjQtNjZiZDVhNGM2YWFhOjQ0ODc5ZjE4LTU1MzgtNGVhNS1hNmRjLTE3ZmFlMzI2Y2IxZA=="
-	schema          = "rma"
-)
-
 // Call AI agent
-func generateFieldDescriptionByAI(ctx context.Context, request string) (response string, err error) {
+func generateFieldDescriptionByAI(ctx context.Context, key string, request string) (response string, err error) {
 	time.Sleep(3000 * time.Millisecond)
 	client, err := gigago.NewClient(ctx,
-		gigachatAuthKey,
+		key,
 		gigago.WithCustomInsecureSkipVerify(true),
 		gigago.WithCustomTimeout(120*time.Second),
 	)
@@ -69,13 +60,13 @@ func generateFieldDescriptionByAI(ctx context.Context, request string) (response
 }
 
 // generateFieldDescriptionsForTable возвращает map с описаниями для всех полей указанной таблицы
-func generateFieldDescriptionsForTable(dbName, dbDescirption, tableName string, columns []string) (map[string]string, error) {
-	request := dbName + ";" + dbDescirption + ";" + tableName
+func generateFieldDescriptionsForTable(cfg *config.Config, tableName string, columns []string) (map[string]string, error) {
+	request := cfg.Database + ";" + cfg.DataDescription + ";" + tableName
 	for _, column := range columns {
 		request += ";" + column
 		// fieldDescriptions[column] = tableName + ":" + generateRandomDescription()
 	}
-	response, err := generateFieldDescriptionByAI(context.Background(), request)
+	response, err := generateFieldDescriptionByAI(context.Background(), cfg.GigaChatAuthKey, request)
 	if err != nil {
 		return nil, err
 	}
@@ -96,12 +87,12 @@ func generateFieldDescriptionsForTable(dbName, dbDescirption, tableName string, 
 }
 
 // updateTableColumnDescriptions обновляет описания полей в таблице ALL_DB_TB_COL_LIST для указанной базы данных
-func updateTableColumnDescriptions(db *sql.DB, databaseName, databaseDescription string) error {
+func updateTableColumnDescriptions(db *sql.DB, cfg *config.Config) error {
 	// Получаем список полей (TABLE_NAME, COLUMN_NAME) для указанной базы данных
 	query := `SELECT TABLE_NAME, COLUMN_NAME 
 	FROM usermodules.[user].ALL_DB_TB_COL_LIST 
-	WHERE DATABASE_NAME = @p1 AND (DESCRIPTION IS NULL OR DESCRIPTION = '') AND SCHEMA_NAME='` + schema + `'`
-	rows, err := db.Query(query, databaseName)
+	WHERE DATABASE_NAME = @p1 AND (DESCRIPTION IS NULL OR DESCRIPTION = '') AND SCHEMA_NAME='` + cfg.Schema + `'`
+	rows, err := db.Query(query, cfg.Database)
 	if err != nil {
 		return fmt.Errorf("ошибка выполнения запроса: %w", err)
 	}
@@ -125,11 +116,11 @@ func updateTableColumnDescriptions(db *sql.DB, databaseName, databaseDescription
 
 	// Для каждой таблицы генерируем описания и обновляем
 	for tableName, columns := range tableColumns {
-		fieldDescriptions, err := generateFieldDescriptionsForTable(databaseName, databaseDescription, tableName, columns)
+		fieldDescriptions, err := generateFieldDescriptionsForTable(cfg, tableName, columns)
 		if err != nil {
 			return err
 		}
-		err = updateDescriptionDb(db, databaseName, tableName, fieldDescriptions)
+		err = updateDescriptionDb(db, cfg, tableName, fieldDescriptions)
 		if err != nil {
 			log.Printf("Ошибка обновления описаний для таблицы %s: %v", tableName, err)
 			// Продолжаем обработку других таблиц
@@ -140,18 +131,18 @@ func updateTableColumnDescriptions(db *sql.DB, databaseName, databaseDescription
 }
 
 // updateDescriptionDb обновляет описания полей в самой таблице базы данных с помощью расширенных свойств
-func updateDescriptionDb(db *sql.DB, databaseName, tableName string, fieldDescriptions map[string]string) error {
+func updateDescriptionDb(db *sql.DB, cfg *config.Config, tableName string, fieldDescriptions map[string]string) error {
 	for column, description := range fieldDescriptions {
 		// Проверяем, существует ли уже описание (extended property) для столбца
-		checkQuery := "USE " + databaseName + `
+		checkQuery := "USE " + cfg.Database + `
 		SELECT 1 FROM fn_listextendedproperty(N'MS_Description',
-			N'SCHEMA', N'` + schema + `',
+			N'SCHEMA', N'` + cfg.Schema + `',
 			N'TABLE', @p1,
 			N'COLUMN', @p2)`
 
 		rows, err := db.Query(checkQuery, tableName, column)
 		if err != nil {
-			log.Printf("Ошибка проверки описания для %s.%s.%s: %v", databaseName, tableName, column, err)
+			log.Printf("Ошибка проверки описания для %s.%s.%s: %v", cfg.Database, tableName, column, err)
 			continue
 		}
 
@@ -164,33 +155,33 @@ func updateDescriptionDb(db *sql.DB, databaseName, tableName string, fieldDescri
 		var execQuery string
 		if exists {
 			// Обновляем существующее описание
-			execQuery = "USE " + databaseName + `
+			execQuery = "USE " + cfg.Database + `
 			EXEC sp_updateextendedproperty
 				@name = N'MS_Description',
 				@value = @p1,
-				@level0type = N'SCHEMA', @level0name = N'` + schema + `',
+				@level0type = N'SCHEMA', @level0name = N'` + cfg.Schema + `',
 				@level1type = N'TABLE', @level1name = @p2,
 				@level2type = N'COLUMN', @level2name = @p3`
 		} else {
 			// Добавляем новое описание
-			execQuery = "USE " + databaseName + `
+			execQuery = "USE " + cfg.Database + `
 			EXEC sp_addextendedproperty
 				@name = N'MS_Description',
 				@value = @p1,
-				@level0type = N'SCHEMA', @level0name = N'` + schema + `',
+				@level0type = N'SCHEMA', @level0name = N'` + cfg.Schema + `',
 				@level1type = N'TABLE', @level1name = @p2,
 				@level2type = N'COLUMN', @level2name = @p3`
 		}
 
 		_, err = db.Exec(execQuery, description, tableName, column)
 		if err != nil {
-			log.Printf("Ошибка установки описания для %s.%s.%s: %v", databaseName, tableName, column, err)
+			log.Printf("Ошибка установки описания для %s.%s.%s: %v", cfg.Database, tableName, column, err)
 			log.Printf("Query: %s", execQuery)
 			continue // Продолжаем, даже если одна операция не удалась
 		}
-		log.Printf("Описание для %s.%s.%s успешно обновлено", databaseName, tableName, column)
+		log.Printf("Описание для %s.%s.%s успешно обновлено", cfg.Database, tableName, column)
 	}
-	err := updateDescriptionINDb(db, databaseName, tableName, fieldDescriptions)
+	err := updateDescriptionINDb(db, cfg.Database, tableName, fieldDescriptions)
 	if err != nil {
 		log.Printf("Ошибка обновления описаний для таблицы %s: %v", tableName, err)
 	}
@@ -216,15 +207,18 @@ func updateDescriptionINDb(db *sql.DB, databaseName, tableName string, fieldDesc
 }
 
 func main() {
-	// Проверяем, передан ли аргумент (имя базы данных)
-	if len(os.Args) < 3 {
-		log.Fatal("Не указано имя базы данных и описание . Использование: go run main.go <имя_базы_данных> <описание_базы_данных>")
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatal("Ошибка загрузки конфигурации: ", err)
 	}
-	databaseName := os.Args[1]
-	databaseDescription := os.Args[2]
+	fmt.Printf("Loaded config: %+v\n", cfg)
+
+	if cfg.Database == "" || cfg.DataDescription == "" || cfg.Schema == "" {
+		log.Fatal("необходимо указать базу-database, схему-schems и описание данных-datadesc")
+	}
 
 	// Подключаемся к базе данных
-	db, err := sql.Open("sqlserver", connectionString)
+	db, err := sql.Open("sqlserver", cfg.DBConnString)
 	if err != nil {
 		log.Fatal("Ошибка подключения к базе данных: ", err)
 	}
@@ -236,9 +230,9 @@ func main() {
 	}
 
 	// Обновляем описания
-	if err := updateTableColumnDescriptions(db, databaseName, databaseDescription); err != nil {
+	if err := updateTableColumnDescriptions(db, cfg); err != nil {
 		log.Fatal("Ошибка обновления описаний: ", err)
 	}
 
-	fmt.Printf("Описания для базы данных '%s' успешно обновлены!\n", databaseName)
+	fmt.Printf("Описания для базы данных '%s' успешно обновлены!\n", cfg.Database)
 }
